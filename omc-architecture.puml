@@ -1,0 +1,286 @@
+' ============================================================================
+' OpenModelica v1.13.0 架构图集(已对照源码逐项验证)
+'
+' 验证依据:
+'   - OMEdit 进程内嵌 omc:      OMEdit/OMEdit/OMEditGUI/OMC/OMCProxy.cpp:269
+'                               (omc_Main_init / omc_Main_handleCommand)
+'   - OMEdit 命令留痕:          OMCProxy.cpp:193 (omeditcommands.mos)
+'   - .mos 批处理入口:          OMCompiler/Compiler/Main/Main.mo:461-481
+'                               (Parser.parseexp -> Interactive.evaluateToStdOut)
+'   - loadFile:                 OMCompiler/Compiler/Script/CevalScript.mo:300
+'   - simulate / plot:          OMCompiler/Compiler/FrontEnd/ModelicaBuiltin.mo:2482/2756
+'   - OMShell 进程内嵌:         OMShell/OMShellGUI/omcinteractiveenvironment.cpp:169
+'   - OMEdit 保存 .mo:          OMEditGUI/Modeling/LibraryTreeWidget.cpp:4457-4671
+'   - 图形 annotation 序列化:   OMEditGUI/Modeling/ModelWidgetContainer.cpp
+'                               (getShapeAnnotation / getClassText)
+'
+' 渲染方式(任选):
+'   - 在线: https://www.plantuml.com/plantuml/uml/ 粘贴全文
+'   - 本地: java -jar plantuml.jar omc-architecture.puml
+'   - VS Code: 安装 "PlantUML" 插件后 Alt+D 预览
+' ============================================================================
+
+@startuml omc_overview
+title OpenModelica v1.13.0 —— omc 与 omc API 在系统中的位置
+
+skinparam componentStyle rectangle
+skinparam backgroundColor #FEFEFE
+
+package "GUI 客户端 —— 进程内嵌 omc 库" {
+  [OMEdit\nQt GUI 建模 / 仿真 / 绘图\n(OMEditGUI/)] as OMEdit
+  [OMShell\n交互式终端\n(OMShellGUI/)] as OMShell
+}
+
+package "外部客户端 —— 通过服务器调用 API" {
+  [OMPython\nPython 脚本] as OMPY
+  [命令行\nomc xxx.mos\n批处理脚本] as CMD
+}
+
+package "omc(= 编译器 + API 服务器,可执行文件或被链接为库)" {
+  package "入口与脚本 API(Compiler/)" {
+    [Main.mo\n入口,分发\n交互/批处理/文件翻译] as MAIN
+    [Interactive.mo\n逐条解析命令、求值、回显\n(evaluateToStdOut)] as INTER
+    [CevalScript.mo + CevalScriptBackend.mo\nloadFile / listFile / setSourceFile ...] as CEVAL
+    [ModelicaBuiltin.mo (FrontEnd/)\nsimulate / plot 等内建 API] as BUILTIN
+  }
+  package "对外通信(Compiler/runtime/)" {
+    [CORBA / socket / zmq 服务器\n(供 OMPython 等外部客户端)] as SERVERS
+  }
+  package "编译流水线(Compiler/)" {
+    [FrontEnd\nParser / Inst / Static] as FE
+    [BackEnd\n方程匹配 / 指标约简 / 撕裂] as BE
+    [SimCode\nDAE -> 计算序列] as SIMCODE
+    [Susan 模板 Template/\nCodegenC.tpl 等 -> C 代码] as TPL
+  }
+}
+
+package "外部工具链与产物" {
+  [C 编译器\n(gcc / cl.exe)] as GCC
+  [仿真可执行文件 M\n(链接 SimulationRuntime/c)] as EXE
+  database "M_res.mat\n仿真结果文件" as MAT
+  database ".mo / .mos\nModelica 源码" as SRC
+  [OMPlot\n绘图窗口] as OMPLOT
+}
+
+' v1.13.0 的 OMEdit/OMShell 把 omc 编译成库直接链接:
+' OMCProxy::sendCommand -> omc_Main_handleCommand(OMCProxy.cpp:269)
+OMEdit --> MAIN : 进程内直接调用\nomc_Main_handleCommand
+OMShell --> MAIN : 进程内直接调用\nomc_Main_handleCommand
+OMPY --> SERVERS : socket/zmq 远程调用 API
+CMD --> MAIN : 传 .mos 脚本路径\n批处理逐条执行 API 命令
+SERVERS --> INTER : API 字符串 -> 命令求值
+
+MAIN --> INTER
+INTER --> CEVAL : 分发到具体 API 实现
+INTER --> BUILTIN : 分发到具体 API 实现
+
+SRC --> FE : loadFile / loadString\n解析 Modelica 源码
+CEVAL --> FE : 翻译请求
+FE --> BE
+BE --> SIMCODE
+SIMCODE --> TPL
+TPL --> GCC : 生成 C 源码 + Makefile
+GCC --> EXE : 编译并链接运行时库
+EXE --> MAT : 运行仿真,写出结果
+BUILTIN --> OMPLOT : plot() 触发\n读取 .mat 并绘图
+OMPLOT --> MAT : 读取
+@enduml
+
+@startuml omc_mos_flow
+title omc simulate.mos 的执行时序 —— .mos 命令就是 omc API 调用
+
+participant "用户" as U
+participant "omc 入口\n(Main.mo translateFile)" as MAIN
+participant "Interactive.mo\n逐条求值 + 回显" as INTER
+participant "API 实现\nCevalScript.mo /\nModelicaBuiltin.mo" as API
+participant "编译流水线\nFrontEnd -> BackEnd -> SimCode" as PIPE
+participant "Susan 模板\n(Template/CodegenC.tpl)" as TPL
+participant "C 编译器 gcc\n+ 运行时库" as GCC
+participant "OMPlot\n绘图窗口" as PLOT
+
+U -> MAIN : omc simulate.mos
+activate MAIN
+note over MAIN : Main.mo:461-481\n识别 .mos -> Parser.parseexp\n-> Interactive.evaluateToStdOut
+
+MAIN -> INTER : parseexp 解析出语句列表
+INTER -> API : loadString("model M Real x(start=1);\nequation der(x) = -x; end M;")
+API -> PIPE : Parser 解析 + 实例化\n(模型存入符号表)
+PIPE --> API : 成功
+API --> INTER : true
+INTER --> U : true(回显到 stdout)
+
+INTER -> API : getErrorString()
+API --> INTER : 错误缓冲(空)
+INTER --> U : (空)
+
+INTER -> API : simulate(M)  [ModelicaBuiltin.mo:2482]
+API -> PIPE : 取已实例化模型\n后端方程匹配 / 指标约简 -> SimCode
+PIPE --> API : 方程求值序列
+API -> TPL : 按模板生成 C 代码
+TPL --> API : M.c / M_functions.c / Makefile
+API -> GCC : 调用外部 C 编译器\n编译并链接 libSimulationRuntimeC
+GCC -> GCC : 运行 M 可执行文件\n数值积分求解 ODE
+GCC --> API : 写出 M_res.mat\n返回 SimulationResult
+API --> INTER : record SimulationResult(resultFile=...)
+INTER --> U : resultFile = ".../M_res.mat"
+
+INTER -> API : plot(x)  [ModelicaBuiltin.mo:2756]
+API -> PLOT : 读取 M_res.mat,\n启动 OMPlot 展示曲线
+PLOT --> U : 曲线窗口
+deactivate MAIN
+@enduml
+
+@startuml omedit_omc_api
+title OMEdit 与 omc 的通信 —— v1.13.0 为进程内嵌(in-process)
+
+participant "用户" as U
+participant "OMEdit\n(Qt/C++ GUI)" as OE
+participant "OMCProxy\n(OMEditGUI/OMC/OMCProxy.cpp)" as PROXY
+participant "omc 库(同一进程)\nomc_Main_handleCommand" as OMC
+participant "磁盘" as DISK
+
+U -> OE : 启动 OMEdit
+OE -> PROXY : initializeOMC()
+PROXY -> OMC : omc_Main_init(初始化编译器,\n不启动外部进程)
+OMC --> PROXY : 初始化完成
+note over OE, OMC : OMEdit 把 omc 编译成库链接进自身。\n每个 GUI 操作 = sendCommand(API 字符串)\n-> omc_Main_handleCommand(OMCProxy.cpp:269)\n所有命令同时记入 omeditcommands.mos
+
+U -> OE : 打开模型 M.mo
+OE -> PROXY : loadFile("M.mo")
+PROXY -> OMC : omc_Main_handleCommand("loadFile(...)")
+OMC --> OE : 解析结果 / 错误消息
+OE -> OE : 构建库浏览器树 + 代码视图
+
+U -> OE : 双击类 M,打开图形视图
+OE -> PROXY : listFile(M)
+PROXY -> OMC : 取完整类文本
+OMC --> OE : 类文本(含 Icon/Diagram annotation)
+OE -> OE : 解析 annotation -> 渲染图形视图
+
+U -> OE : 拖拽组件 / 连线 / 画图形
+OE -> OE : 修改内存图形对象树\n(组件声明 + Placement / Graphics annotation)
+
+U -> OE : 保存
+OE -> PROXY : validateText:文本改动先发 omc 校验 AST
+PROXY -> OMC : parseString(...)
+OMC --> OE : 校验通过
+OE -> OE : 文本视图优先取编辑器内容;\n否则 getClassText() 从树重建类文本\n(图形对象 -> getShapeAnnotation() 序列化)
+OE -> DISK : 写入 M.mo
+OE -> PROXY : setSourceFile(M, 文件路径) 通知 omc
+note right of OE : .mo 是纯文本 Modelica 源码,\n图形只是 annotation 的可视化\n(LibraryTreeWidget.cpp:4457-4671)
+
+U -> OE : 点击"仿真"
+OE -> PROXY : simulate(M)
+PROXY -> OMC : 直呼 API(内部流水线同图 2)
+OMC --> OE : SimulationResult
+OE -> OE : 读取 M_res.mat,\n内嵌绘图窗口画曲线
+@enduml
+
+@startuml omedit_addcomponent_flow
+title 拖入组件的完整数据流 —— 写命令与读查询双通道
+
+participant "用户" as U
+participant "OMEdit 图形视图\n(GraphicsView)" as GV
+participant "OMEdit 内存\n图形对象树 + 库树" as MEM
+participant "OMCProxy" as PROXY
+participant "omc\n(Absyn 语法树)" as OMC
+
+note over GV, OMC
+  #red 双通道模型:
+  写通道(命令,返回仅 Ok/false):
+    addComponent / updateComponent / deleteComponent
+  读通道(查询,返回真实数据):
+    listFile / getIconAnnotation / getClassInformation
+  渲染数据不来自任何 API 响应,而是 OMEdit 本地内存
+end note
+
+== 前期:打开/加载模型(渲染数据在此刻入库,与拖放无关) ==
+GV -> OMC : loadString / loadFile(MSL 等)
+OMC --> GV : 解析成功
+GV -> MEM : 把每个类的 Icon/Diagram annotation\n解析为图形对象树(ShapeAnnotation)\n存入库树节点
+note right of MEM
+  电阻"长什么样"(矩形+引线)
+  此刻已经作为图形对象存在内存里
+end note
+
+== 拖放瞬间:本地渲染先行 ==
+U -> GV : 从库浏览器拖 Resistor 到 Diagram
+GV -> MEM : 立即创建 Component 图形对象\n= 拷贝电阻类的 Icon 图形对象\n+ Placement(名字/位置/旋转)\n(Component::createClassComponents, Component.cpp:1066)
+note right of GV : 图形立即出现在画布上,\n不等待任何返回值
+
+== 并行:写命令同步 omc AST ==
+GV -> PROXY : addComponent(R1, Resistor, M, annotate=Placement(...))\n(OMCProxy.cpp:1795)
+PROXY -> OMC : omc_Main_handleCommand
+OMC -> OMC : Interactive.addComponent(Interactive.mo:8760)\n构造 Absyn.COMPONENT 节点\n插入类元素列表
+OMC --> PROXY : "Ok"(仅确认,无渲染数据)
+
+== 收尾:updateModelText 拉回文本 ==
+GV -> MEM : updateModelText()\n标题加 * / 标记未保存\n(ModelWidgetContainer.cpp:4409)
+MEM -> PROXY : listFile(M)
+PROXY -> OMC : 查询
+OMC --> MEM : unparse 后的完整类文本\n(此刻 R1 出现在文本里)
+MEM -> MEM : diffModelicaFileListings 旧文本 diff\n-> setPlainText 刷新文本视图
+
+== 后续编辑走同一模式 ==
+U -> GV : 移动组件 / 改参数 R=100
+GV -> MEM : 本地直接重绘
+GV -> PROXY : updateComponent(...) 命令
+PROXY -> OMC : 更新 AST 节点
+GV -> MEM : updateModelText() 再拉一次文本
+@enduml
+
+@startuml omedit_mo_generation
+title OMEdit 如何生成 .mo —— 图形编辑与文本编辑双向同步
+
+start
+:新建/打开 Modelica 类 M;
+
+partition "图形编辑模式(Icon / Diagram 视图)" {
+  :内存中建立类对象树 = 代码骨架 + annotation 对象树;
+  note right
+    OMEditGUI/Annotations/ 下的图形对象
+    (ShapeAnnotation、LineAnnotation、
+    TextAnnotation 等)与组件 Element
+  end note
+  if (拖入库组件?) then (是)
+    :生成组件声明文本
+    `Modelica.Electrical.Analog.Basic.Resistor R1(R=100);`
+    并创建 Placement annotation 图形对象;
+  else (否)
+    :绘制纯图形(矩形/线条/文本)
+    -> Icon/Diagram 的 Graphics annotation 对象;
+  endif
+  if (连线?) then (是)
+    :生成 connect(a.p, b.n) 语句
+    + 连线图形对象;
+  else (否)
+  endif
+  :在参数窗口修改 R=100
+  -> 更新声明中的修饰(modification);
+}
+
+partition "文本编辑模式(代码视图)" {
+  :直接在编辑器里修改 Modelica 源码;
+  :调用 omc API parseString() 做语法校验
+  (validateText,LibraryTreeWidget.cpp:4464);
+  if (有语法错误?) then (有)
+    :错误行标红,提示修正;
+  else (无)
+    :重新解析 annotation 段
+    -> 刷新图形视图(双向同步);
+  endif
+}
+
+partition "保存" {
+  :取类文本:
+  文本视图有改动 -> 直接取编辑器内容;
+  否则 getClassText() 从树生成
+  (图形对象 getShapeAnnotation()
+  -> 序列化 annotation 文本);
+  :合并为统一类文本;
+  :写入磁盘 M.mo;
+  :setSourceFile(M, 路径) 通知 omc;
+}
+
+stop
+@enduml
