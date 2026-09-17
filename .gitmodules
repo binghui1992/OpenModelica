@@ -1,33 +1,33 @@
 [submodule "OMEdit"]
 	path = OMEdit
-	url = ../OMEdit.git
+	url = https://github.com/OpenModelica/OMEdit.git
 [submodule "doc"]
 	path = doc
-	url = ../OpenModelica-doc.git
+	url = https://github.com/OpenModelica/OpenModelica-doc.git
 [submodule "OMOptim"]
 	path = OMOptim
-	url = ../OMOptim.git
+	url = https://github.com/OpenModelica/OMOptim.git
 [submodule "OMPlot"]
 	path = OMPlot
-	url = ../OMPlot.git
+	url = https://github.com/OpenModelica/OMPlot.git
 [submodule "OMNotebook"]
 	path = OMNotebook
-	url = ../OMNotebook.git
+	url = https://github.com/OpenModelica/OMNotebook.git
 [submodule "common"]
 	path = common
-	url = ../OpenModelica-common.git
+	url = https://github.com/OpenModelica/OpenModelica-common.git
 [submodule "libraries"]
 	path = libraries
-	url = ../OMLibraries.git
+	url = https://github.com/OpenModelica/OMLibraries.git
 [submodule "OMC"]
 	path = OMCompiler
-	url = ../OMCompiler.git
+	url = https://github.com/OpenModelica/OMCompiler.git
 [submodule "testsuite"]
 	path = testsuite
-	url = ../OpenModelica-testsuite.git
+	url = https://github.com/OpenModelica/OpenModelica-testsuite.git
 [submodule "OMShell"]
 	path = OMShell
-	url = ../OMShell.git
+	url = https://github.com/OpenModelica/OMShell.git
 [submodule "OMSimulator"]
 	path = OMSimulator
-	url = ../OMSimulator.git
+	url = https://github.com/OpenModelica/OMSimulator.git
